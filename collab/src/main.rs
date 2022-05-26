@@ -1,3 +1,4 @@
+use serde::Serialize;
 /**
 * The first two steps for each framework are the same:
    • Start a server on a specific port
@@ -6,19 +7,33 @@
 */
 
 /**
- * Every time a HTTP request comes in, the framework is
-processing it in a few steps:
-    • Check the request path inside the HTTP request
-    • Check the HTTP request type (GET, PUT, POST etc.)
-    • Forward the request to a route handler which is responsible for the path and type
-    • Before forwarding it to the end route handler, the request can be passed through a
-    so-called middleware which checks things like authentication headers or adds further
-    information to the request object for the end route handler
- */
+* Every time a HTTP request comes in, the framework is processing it in a few steps:
+   • Check the request path inside the HTTP request
+   • Check the HTTP request type (GET, PUT, POST etc.)
+   • Forward the request to a route handler which is responsible for the path and type
+   • Before forwarding it to the end route handler, the request can be passed through a
+   so-called middleware which checks things like authentication headers or adds further
+   information to the request object for the end route handler
+*/
+
+/**
+* error handling
+* We have to do three things to be able return a custom error in our recover handler:
+   • Create our own custom error-type
+   • Implement the Reject trait from warp on this type
+   • Return the custom error in our route-handler
+*/
 use std::io::{Error, ErrorKind};
 use std::str::FromStr;
-use warp::Filter;
-use serde::Serialize;
+use warp::reject::Reject;
+use warp::{http::StatusCode, Filter, Rejection, Reply};
+
+#[derive(Debug)]
+struct InvalidId;
+impl Reject for InvalidId {}
+
+#[derive(Debug, Serialize)]
+struct QuestionId(String);
 
 #[derive(Debug, Serialize)]
 struct Question {
@@ -28,8 +43,6 @@ struct Question {
     tags: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize)]
-struct QuestionId(String);
 impl Question {
     fn new(id: QuestionId, title: String, content: String, tags: Option<Vec<String>>) -> Self {
         Question {
@@ -60,13 +73,28 @@ async fn get_questions() -> Result<impl warp::Reply, warp::Rejection> {
     );
     println!("{:?}", question);
 
-   Ok(warp::reply::json(&question))
+    match question.id.0.is_empty() {
+        true => Err(warp::reject::custom(InvalidId)),
+        false => Ok(warp::reply::json(&question)),
+    }
 }
 
+async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
+    if let Some(InvalidId) = r.find() {
+        Ok(warp::reply::with_status(
+            "No valid ID presented",
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ))
+    } else {
+        Ok(warp::reply::with_status(
+            "Route not found",
+            StatusCode::NOT_FOUND,
+        ))
+    }
+}
 
 #[tokio::main]
 async fn main() {
-
     // create a path Filter
     let hi = warp::path("hello").map(|| {
         println!("request received");
@@ -79,7 +107,8 @@ async fn main() {
     let get_items = warp::get()
         .and(warp::path("questions"))
         .and(warp::path::end())
-        .and_then(get_questions);
+        .and_then(get_questions)
+        .recover(return_error);
 
     let routes = get_items;
 
