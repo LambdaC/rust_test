@@ -1,5 +1,3 @@
-use serde::Serialize;
-use std::collections::HashMap;
 /**
 * The first two steps for each framework are the same:
    • Start a server on a specific port
@@ -24,11 +22,14 @@ use std::collections::HashMap;
    • Implement the Reject trait from warp on this type
    • Return the custom error in our route-handler
 */
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{Error, ErrorKind};
 use std::str::FromStr;
 use warp::filters::cors::CorsForbidden;
-use warp::{http::Method, http::StatusCode, reject::Reject, Filter, Rejection, Reply};
+use warp::{http::Method, http::StatusCode, Filter, Rejection, Reply};
 
+#[derive(Clone)]
 struct Store {
     questions: HashMap<QuestionId, Question>,
 }
@@ -36,50 +37,25 @@ struct Store {
 impl Store {
     fn new() -> Self {
         Store {
-            questions: HashMap::new(),
+            questions: Self::init(),
         }
     }
 
-    fn add_question(mut self, question: &Question) -> Self {
-        self.questions.insert(question.id.clone(), question.clone());
-        self
-    }
-
-    fn init(mut self) -> Self{
-        let question = Question::new(
-            QuestionId("1".to_string()),
-            "How?".to_string(),
-            "Please help!".to_string(),
-            Some(vec!["general".to_string()]),
-        );
-        self.add_question(&question)
+    fn init() -> HashMap<QuestionId, Question> {
+        let file = include_str!("../questions.json");
+        serde_json::from_str(file).expect("can't read questions.json")
     }
 }
 
-#[derive(Debug)]
-struct InvalidId;
-impl Reject for InvalidId {}
-
-#[derive(Debug, Serialize, Eq, Hash, PartialEq, Clone)]
+#[derive(Debug, Serialize, Eq, Hash, PartialEq, Clone, Deserialize)]
 struct QuestionId(String);
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, Deserialize)]
 struct Question {
     id: QuestionId,
     title: String,
     content: String,
     tags: Option<Vec<String>>,
-}
-
-impl Question {
-    fn new(id: QuestionId, title: String, content: String, tags: Option<Vec<String>>) -> Self {
-        Question {
-            id,
-            title,
-            content,
-            tags,
-        }
-    }
 }
 
 impl FromStr for QuestionId {
@@ -92,19 +68,9 @@ impl FromStr for QuestionId {
     }
 }
 
-async fn get_questions() -> Result<impl warp::Reply, warp::Rejection> {
-    let question = Question::new(
-        QuestionId::from_str("1").expect("No id provided"),
-        "First Question".to_string(),
-        "Content of question".to_string(),
-        Some(vec!["faq".to_string()]),
-    );
-    println!("{:?}", question);
-
-    match question.id.0.is_empty() {
-        true => Err(warp::reject::custom(InvalidId)),
-        false => Ok(warp::reply::json(&question)),
-    }
+async fn get_questions(store: Store) -> Result<impl warp::Reply, warp::Rejection> {
+    let res: Vec<Question> = store.questions.values().cloned().collect();
+    Ok(warp::reply::json(&res))
 }
 
 async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
@@ -112,11 +78,6 @@ async fn return_error(r: Rejection) -> Result<impl Reply, Rejection> {
         Ok(warp::reply::with_status(
             error.to_string(),
             StatusCode::FORBIDDEN,
-        ))
-    } else if let Some(InvalidId) = r.find() {
-        Ok(warp::reply::with_status(
-            "No valid ID presented".to_string(),
-            StatusCode::UNPROCESSABLE_ENTITY,
         ))
     } else {
         Ok(warp::reply::with_status(
@@ -137,6 +98,9 @@ async fn main() {
     // only handle get request
     // let hi = warp::get().map(|| format!("Hello"));
 
+    let store = Store::new();
+    let store_filter = warp::any().map(move || store.clone());
+
     let cors = warp::cors()
         .allow_any_origin()
         .allow_header("content-type")
@@ -145,6 +109,7 @@ async fn main() {
     let get_items = warp::get()
         .and(warp::path("questions"))
         .and(warp::path::end())
+        .and(store_filter)
         .and_then(get_questions)
         .recover(return_error);
 
