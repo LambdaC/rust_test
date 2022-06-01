@@ -1,3 +1,5 @@
+use serde::Serialize;
+use std::collections::HashMap;
 /**
 * The first two steps for each framework are the same:
    • Start a server on a specific port
@@ -26,16 +28,42 @@ use std::io::{Error, ErrorKind};
 use std::str::FromStr;
 use warp::filters::cors::CorsForbidden;
 use warp::{http::Method, http::StatusCode, reject::Reject, Filter, Rejection, Reply};
-use serde::Serialize;
+
+struct Store {
+    questions: HashMap<QuestionId, Question>,
+}
+
+impl Store {
+    fn new() -> Self {
+        Store {
+            questions: HashMap::new(),
+        }
+    }
+
+    fn add_question(mut self, question: &Question) -> Self {
+        self.questions.insert(question.id.clone(), question.clone());
+        self
+    }
+
+    fn init(mut self) -> Self{
+        let question = Question::new(
+            QuestionId("1".to_string()),
+            "How?".to_string(),
+            "Please help!".to_string(),
+            Some(vec!["general".to_string()]),
+        );
+        self.add_question(&question)
+    }
+}
 
 #[derive(Debug)]
 struct InvalidId;
 impl Reject for InvalidId {}
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Eq, Hash, PartialEq, Clone)]
 struct QuestionId(String);
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 struct Question {
     id: QuestionId,
     title: String,
